@@ -1,0 +1,13 @@
+2025/06/09-10:53:43.154 6858 Reusing MANIFEST /home/vladislav/goproject/answering/chrome_profile_ai/Default/IndexedDB/https_character.ai_0.indexeddb.leveldb/MANIFEST-000001
+2025/06/09-10:53:43.154 6858 Recovering log #323
+2025/06/09-10:53:43.154 6858 Reusing old log /home/vladislav/goproject/answering/chrome_profile_ai/Default/IndexedDB/https_character.ai_0.indexeddb.leveldb/000323.log 
+2025/06/09-10:53:43.283 6858 Level-0 table #327: started
+2025/06/09-10:53:43.284 6858 Level-0 table #327: 7085 bytes OK
+2025/06/09-10:53:43.285 6858 Delete type=0 #323
+2025/06/09-10:53:43.285 6858 Manual compaction at level-0 from '\x00e\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00f\x00\x00\x00' @ 0 : 0; will stop at '\x00e\x00\x00\x05' @ 5231 : 1
+2025/06/09-10:53:43.285 6858 Compacting 1@0 + 1@1 files
+2025/06/09-10:53:43.286 6858 Generated table #328@0: 37 keys, 3437 bytes
+2025/06/09-10:53:43.286 6858 Compacted 1@0 + 1@1 files => 3437 bytes
+2025/06/09-10:53:43.288 6858 compacted to: files[ 0 1 1 0 0 0 0 ]
+2025/06/09-10:53:43.288 6858 Delete type=2 #327
+2025/06/09-10:53:43.288 6858 Manual compaction at level-0 from '\x00e\x00\x00\x05' @ 5231 : 1 .. '\x00f\x00\x00\x00' @ 0 : 0; will stop at (end)
