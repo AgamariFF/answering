@@ -2,15 +2,17 @@ package ai
 
 import (
 	"answering/logger"
+	"answering/models"
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/chromedp"
 )
 
-func Handler(log *logger.Logger) {
+func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan models.Message, wg *sync.WaitGroup) {
 	profilePath := "./chrome_profile_ai"
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -36,7 +38,7 @@ func Handler(log *logger.Logger) {
 	defer cancel0()
 	defer cancel1()
 
-	url := "https://character.ai/"
+	url := "https://character.ai/chat/S8NFtpIzsPYAESWca80JCp-1U8aefZXg9ERgkE4UqW0"
 	var text string
 
 	err := chromedp.Run(ctx,
@@ -64,5 +66,32 @@ func Handler(log *logger.Logger) {
 		fmt.Println("Авторизация в Ai не требуйется")
 		log.InfoLog.Println("Авторизация в Ai не требуйется")
 	}
+
 	time.Sleep(5 * time.Second)
+	wg.Done()
+	wg.Wait()
+
+	for {
+		incomingMsg := <-incoming
+		log.InfoLog.Println("AiHeabdler считал входящее сообщение: ", incomingMsg)
+		var outcomingMsg models.Message
+		outcomingMsg.ID = incomingMsg.ID
+		err = chromedp.Run(ctx,
+			chromedp.SendKeys(`//*[@id="chat-body"]/div[2]/div/div/div/div[1]/textarea`, incomingMsg.Text, chromedp.NodeVisible),
+			chromedp.Click(`//*[@id="chat-body"]/div[2]/div/div/div/div[2]/button`, chromedp.NodeVisible),
+			chromedp.Sleep(10*time.Second),
+			chromedp.Text(`//*[@id="chat-messages"]/div[1]/div[1]/div/div/div[1]/div/div[1]/div[1]/div[2]/div[2]/div/div[1]`, &outcomingMsg.Text, chromedp.NodeVisible),
+		)
+		if err != nil {
+			log.ErrorLog.Println(err)
+			continue
+		}
+		if strings.HasSuffix(outcomingMsg.Text, ".") {
+			outcomingMsg.Text = outcomingMsg.Text[:len(outcomingMsg.Text)-1]
+		}
+		fmt.Println("Ответ от Ai: " + outcomingMsg.Text)
+		log.InfoLog.Println("AiHeabdler обработал сообщение и пытается отправить ответ в oucoming: ", outcomingMsg)
+		outcoming <- outcomingMsg
+		log.InfoLog.Println("AiHeabdler отправил ответ в outcoming: ", outcomingMsg)
+	}
 }
