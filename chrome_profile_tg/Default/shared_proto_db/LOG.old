@@ -1,6 +1,0 @@
-2025/06/09-15:59:42.619 13905 Reusing MANIFEST /home/vladislav/goproject/answering/chrome_profile_tg/Default/shared_proto_db/MANIFEST-000001
-2025/06/09-15:59:42.620 13905 Recovering log #3
-2025/06/09-15:59:42.622 13905 Reusing old log /home/vladislav/goproject/answering/chrome_profile_tg/Default/shared_proto_db/000003.log 
-2025/06/09-15:59:42.701 13905 Level-0 table #5: started
-2025/06/09-15:59:42.706 13905 Level-0 table #5: 108273 bytes OK
-2025/06/09-15:59:42.709 13905 Delete type=0 #3
