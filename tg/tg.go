@@ -88,14 +88,16 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 	wg.Done()
 	wg.Wait()
 
-	var message, id, classAttr string
+	var message, id, classAttr, author string
 	var lastMsgId int
 	var outMsg bool
 	for true {
 		for i := 0; true; i++ {
+			time.Sleep(300 * time.Millisecond)
 			count := 2 + i%5
 			xpath := `//*[@id="LeftColumn-main"]/div[2]/div/div[2]/div/div[2]/div[` + strconv.Itoa(count) + `]/a`
 			xpathText := xpath + `/div[3]/div[2]/div/div`
+			xpathAuthor := xpath + `/div[3]/div[1]/div[1]/h3`
 
 			err = chromedp.Run(ctx,
 				chromedp.EvaluateAsDevTools(fmt.Sprintf(`
@@ -108,34 +110,48 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 			if !exists {
 				continue
 			}
+			log.InfoLog.Println("Найдено непрочитанное сообщение")
 
+			var ids []string
 			err = chromedp.Run(ctx,
 				chromedp.AttributeValue(xpath, "href", &id, nil, chromedp.BySearch),
+				chromedp.Text(xpathAuthor, &author),
 				chromedp.Click(xpathText),
+				chromedp.Sleep(3*time.Second),
 				chromedp.Evaluate(`
-            (() => {
-                const elements = Array.from(document.querySelectorAll('[id^="message-"]'));
-                if (elements.length === 0) return null;
-                
-                const nums = elements
-                    .map(el => {
-                        const match = el.id.match(/message-(\d+)/);
-                        return match ? parseInt(match[1], 10) : null;
-                    })
-                    .filter(n => n !== null);
-                
-                return nums.length > 0 ? Math.max(...nums) : null;
-            })()
-        `, &lastMsgId),
+				Array.from(document.querySelectorAll('[id^="message-"]'))
+				.map(el => el.id)
+				.filter(id => /^message-\d+$/.test(id))
+				`, &ids),
 			)
 			if err != nil {
 				log.ErrorLog.Println(err)
 			}
 
+			lastMsgId = 0
+			for _, id := range ids {
+				num, err := strconv.Atoi(id[8:]) // "message-" = 8 символов
+				if err == nil && num > lastMsgId {
+					lastMsgId = num
+				}
+			}
+
+			if lastMsgId == 0 {
+				log.ErrorLog.Println("Сообщения не найдены")
+				err = chromedp.Run(ctx,
+					chromedp.Navigate(urlTg),
+				)
+				continue
+			}
+
+			log.InfoLog.Println("Сообщение имеет ID ", lastMsgId)
+
 			xpathMsg := fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, lastMsgId)
 			err = chromedp.Run(ctx,
 				chromedp.AttributeValue(xpathMsg, "class", &classAttr, &exists),
 			)
+
+			log.InfoLog.Println("Сообщение имеет аттрибуты: ", classAttr)
 
 			if err != nil {
 				log.ErrorLog.Println(err)
@@ -151,6 +167,10 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 
 			if outMsg {
 				outMsg = false
+				log.InfoLog.Println("Сообщение либо исходящее, либо стикер")
+				chromedp.Run(ctx,
+					chromedp.Navigate(urlTg),
+				)
 				continue
 			}
 
@@ -163,25 +183,31 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 					log.ErrorLog.Fatalln(err)
 				}
 				if strings.Contains(classAttr, "Audio") { // Пришло гс ответом на сообщение
+					log.InfoLog.Println("Пришло гс ответом на сообщение")
 					message = convertVoice(ctx, lastMsgId, log, message, 1)
 				}
 				if strings.Contains(classAttr, "RoundVideo") { // Пришел кружок ответом на сообщение
+					log.InfoLog.Println("Пришел кружок ответом на сообщение")
 					message = convertVoice(ctx, lastMsgId, log, message, 2)
 				} else { // Текстовое сообщение ответом на сообщение
-					message = processMessage(message)
+					log.InfoLog.Println("Текстовое сообщение ответом на сообщение")
+					message = processMessage(message, author)
 				}
 				break
 			} else { // это не ответ на сообщение
 				err = chromedp.Run(ctx,
-					chromedp.Text(xpath, &message, chromedp.BySearch),
+					chromedp.Text(xpathMsg, &message, chromedp.BySearch),
 				)
 				if strings.Contains(classAttr, "Audio") { // Пришло гс
+					log.InfoLog.Println("Пришло гс")
 					message = convertVoice(ctx, lastMsgId, log, message, 1)
 				}
 				if strings.Contains(classAttr, "RoundVideo") { // Пришел кружок
+					log.InfoLog.Println("Пришел кружок")
 					message = convertVoice(ctx, lastMsgId, log, message, 2)
 				} else { // Текстовое сообщение
-					message = processMessage(message)
+					log.InfoLog.Println("Текстовое сообщение")
+					message = processMessage(message, author)
 				}
 				if err != nil {
 					log.ErrorLog.Fatalln(err)
@@ -191,12 +217,15 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 		}
 
 		incoming <- models.Message{Text: message, ID: id}
+		log.InfoLog.Println("Входящее сообщение отправленно в AI")
 		outcomingMsg := <-outcoming
-		log.InfoLog.Println("Считано сообщение из outcoming: ", outcomingMsg)
+		log.InfoLog.Println("Получен ответ от AI: ", outcomingMsg)
 		err = chromedp.Run(ctx,
 			chromedp.SendKeys(`//*[@id="editable-message-text"]`, outcomingMsg.Text, chromedp.NodeVisible),
 			chromedp.Sleep(500*time.Millisecond),
 			chromedp.Click(`//*[@id="MiddleColumn"]/div[4]/div[3]/div/div[2]/div[1]/button`, chromedp.NodeVisible),
+			chromedp.Sleep(500*time.Millisecond),
+			chromedp.Navigate(urlTg),
 		)
 		if err != nil {
 			log.ErrorLog.Println(err)
@@ -211,7 +240,7 @@ func convertVoice(ctx context.Context, id int, log *logger.Logger, msgTime strin
 	var xpath string
 	if err != nil {
 		log.ErrorLog.Println(err)
-		sleepTime = time.Minute
+		sleepTime = 30 * time.Second
 	}
 	switch typeMsg {
 	case 1:
@@ -236,7 +265,7 @@ func convertVoice(ctx context.Context, id int, log *logger.Logger, msgTime strin
 func parseDuration(s string) (time.Duration, error) {
 	parts := strings.Split(s, ":")
 	if len(parts) != 2 {
-		return 0, errors.New("некорректный формат, требуется 'мин:сек'")
+		return 0, errors.New("некорректный формат, требуется 'мин:сек', получен: " + s)
 	}
 
 	min, err := strconv.Atoi(parts[0])
@@ -252,7 +281,7 @@ func parseDuration(s string) (time.Duration, error) {
 	return time.Duration(min)*time.Minute + time.Duration(sec)*time.Second, nil
 }
 
-func processMessage(input string) string {
+func processMessage(input, author string) string {
 	// Убираем время в формате HH:MM
 	re := regexp.MustCompile(`\d{2}:\d{2}`)
 	input = re.ReplaceAllString(input, "")
@@ -265,5 +294,5 @@ func processMessage(input string) string {
 	input = strings.Trim(input, ". ")
 
 	// Добавляем префикс "Отправитель: "
-	return "Отправитель: " + input
+	return "Отправитель: " + author + ". Сообщение: " + input
 }

@@ -30,6 +30,9 @@ func main() {
 
 	go ai.Handler(log, incoming, outcoming, &waitSetup)
 
+	waitSetup.Wait()
+	fmt.Println("Программа работает")
+
 	var end string
 	fmt.Scan(&end)
 }

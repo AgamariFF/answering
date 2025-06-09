@@ -38,7 +38,7 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 	defer cancel0()
 	defer cancel1()
 
-	url := "https://character.ai/chat/S8NFtpIzsPYAESWca80JCp-1U8aefZXg9ERgkE4UqW0"
+	url := "https://character.ai/chat/8XYC6I1tuVesOeifyRXkz6k0Q9tJxoLVXewJR1q5In4"
 	var text string
 
 	err := chromedp.Run(ctx,
@@ -79,7 +79,7 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 		err = chromedp.Run(ctx,
 			chromedp.SendKeys(`//*[@id="chat-body"]/div[2]/div/div/div/div[1]/textarea`, incomingMsg.Text, chromedp.NodeVisible),
 			chromedp.Click(`//*[@id="chat-body"]/div[2]/div/div/div/div[2]/button`, chromedp.NodeVisible),
-			chromedp.Sleep(10*time.Second),
+			chromedp.Sleep(15*time.Second),
 			chromedp.Text(`//*[@id="chat-messages"]/div[1]/div[1]/div/div/div[1]/div/div[1]/div[1]/div[2]/div[2]/div/div[1]`, &outcomingMsg.Text, chromedp.NodeVisible),
 		)
 		if err != nil {
@@ -89,7 +89,6 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 		if strings.HasSuffix(outcomingMsg.Text, ".") {
 			outcomingMsg.Text = outcomingMsg.Text[:len(outcomingMsg.Text)-1]
 		}
-		fmt.Println("Ответ от Ai: " + outcomingMsg.Text)
 		log.InfoLog.Println("AiHeabdler обработал сообщение и пытается отправить ответ в oucoming: ", outcomingMsg)
 		outcoming <- outcomingMsg
 		log.InfoLog.Println("AiHeabdler отправил ответ в outcoming: ", outcomingMsg)
