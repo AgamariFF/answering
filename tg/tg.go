@@ -150,6 +150,12 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 
 			var xpathMsg string
 			if id[0] == '-' { //Сообщение в беседе
+				err = chromedp.Run(ctx,
+					chromedp.Text(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, &author),
+				)
+				if err != nil {
+					log.ErrorLog.Println("Ошибка определения автора сообзения в беседе")
+				}
 				xpathMsg = fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div[2]`, lastMsgId)
 			} else {
 				xpathMsg = fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, lastMsgId)
