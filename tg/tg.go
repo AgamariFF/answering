@@ -23,7 +23,7 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 		chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("user-data-dir", profilePathTg),
 		// chromedp.ProxyServer("45.8.211.64:80"),
-		chromedp.Flag("headless", false),
+		chromedp.Flag("headless", true),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
 		chromedp.Flag("enable-automation", false),
 		// chromedp.Flag("disable-web-security", true),
@@ -117,7 +117,7 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 				chromedp.AttributeValue(xpath, "href", &id, nil, chromedp.BySearch),
 				chromedp.Text(xpathAuthor, &author),
 				chromedp.Click(xpathText),
-				chromedp.Sleep(3*time.Second),
+				chromedp.Sleep(5*time.Second),
 				chromedp.Evaluate(`
 				Array.from(document.querySelectorAll('[id^="message-"]'))
 				.map(el => el.id)
@@ -127,6 +127,8 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 			if err != nil {
 				log.ErrorLog.Println(err)
 			}
+
+			id = id[1 : len(id)-1]
 
 			lastMsgId = 0
 			for _, id := range ids {
@@ -146,12 +148,25 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 
 			log.InfoLog.Println("Сообщение имеет ID ", lastMsgId)
 
-			xpathMsg := fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, lastMsgId)
+			var xpathMsg string
+			if id[0] == '-' { //Сообщение в беседе
+				xpathMsg = fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div[2]`, lastMsgId)
+			} else {
+				xpathMsg = fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, lastMsgId)
+			}
+
 			err = chromedp.Run(ctx,
 				chromedp.AttributeValue(xpathMsg, "class", &classAttr, &exists),
 			)
 
 			log.InfoLog.Println("Сообщение имеет аттрибуты: ", classAttr)
+
+			if id[0] == '-' && strings.Contains(classAttr, "message-subheader") {
+				xpathMsg = fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div[3]`, lastMsgId)
+				err = chromedp.Run(ctx,
+					chromedp.AttributeValue(xpathMsg, "class", &classAttr, &exists),
+				)
+			}
 
 			if err != nil {
 				log.ErrorLog.Println(err)

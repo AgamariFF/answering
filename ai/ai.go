@@ -79,8 +79,10 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 		err = chromedp.Run(ctx,
 			chromedp.SendKeys(`//*[@id="chat-body"]/div[2]/div/div/div/div[1]/textarea`, incomingMsg.Text, chromedp.NodeVisible),
 			chromedp.Click(`//*[@id="chat-body"]/div[2]/div/div/div/div[2]/button`, chromedp.NodeVisible),
-			chromedp.Sleep(15*time.Second),
-			chromedp.Text(`//*[@id="chat-messages"]/div[1]/div[1]/div/div/div[1]/div/div[1]/div[1]/div[2]/div[2]/div/div[1]`, &outcomingMsg.Text, chromedp.NodeVisible),
+			// chromedp.Sleep(15*time.Second),
+			chromedp.WaitVisible(`//*[@id="chat-messages"]/div[1]/div[1]/div/div/div[1]/div/div[1]/div[1]/div[2]/div[2]/div/div[1]/p`),
+			chromedp.Sleep(5*time.Second),
+			chromedp.Text(`//*[@id="chat-messages"]/div[1]/div[1]/div/div/div[1]/div/div[1]/div[1]/div[2]/div[2]/div/div[1]/p`, &outcomingMsg.Text, chromedp.NodeVisible),
 		)
 		if err != nil {
 			log.ErrorLog.Println(err)
