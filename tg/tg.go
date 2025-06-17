@@ -10,20 +10,19 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/chromedp/chromedp"
 )
 
-func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan models.Message, wg *sync.WaitGroup) {
+func SetupTg(log *logger.Logger, urlTg string) (context.Context, context.CancelFunc) {
 	profilePathTg := "./chrome_profile_tg"
 
 	optionsTg := append(
 		chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("user-data-dir", profilePathTg),
 		// chromedp.ProxyServer("45.8.211.64:80"),
-		chromedp.Flag("headless", true),
+		chromedp.Flag("headless", false),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"),
 		chromedp.Flag("enable-automation", false),
 		// chromedp.Flag("disable-web-security", true),
@@ -38,9 +37,7 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 		chromedp.WithDebugf(func(string, ...interface{}) {}),
 		chromedp.WithErrorf(func(string, ...interface{}) {}),
 	)
-	defer cancel()
 
-	urlTg := "https://web.telegram.org/a"
 	var screenBuffer []byte
 	var exists bool
 
@@ -85,12 +82,13 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 	}
 
 	time.Sleep(3 * time.Second)
-	wg.Done()
-	wg.Wait()
 
-	var message, id, classAttr, author string
-	var lastMsgId int
-	var outMsg bool
+	return ctx, cancel
+}
+
+func HandlerCheckMsg(log *logger.Logger, NewChatId chan string, ctx context.Context) {
+	var id, author string
+	var exists bool
 	for true {
 		for i := 0; true; i++ {
 			time.Sleep(300 * time.Millisecond)
@@ -99,7 +97,7 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 			xpathText := xpath + `/div[3]/div[2]/div/div`
 			xpathAuthor := xpath + `/div[3]/div[1]/div[1]/h3`
 
-			err = chromedp.Run(ctx,
+			err := chromedp.Run(ctx,
 				chromedp.EvaluateAsDevTools(fmt.Sprintf(`
 			document.evaluate('%s', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue !== null
 		`, xpathText), &exists),
@@ -127,133 +125,242 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 			if err != nil {
 				log.ErrorLog.Println(err)
 			}
+			NewChatId <- author
+		}
+	}
+}
 
-			id = id[1 : len(id)-1]
+func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming chan models.Message, ctx context.Context) {
+	var outcomingMsg models.Message
+	var maxN *int
+	var n int
+	lastMsg := models.Message{"", ""}
+	time.Sleep(time.Second)
+	err := chromedp.Run(ctx,
+		chromedp.EmulateViewport(1500, 800),
+		chromedp.Evaluate(`
+            (() => {
+                const elements = Array.from(document.querySelectorAll('[id^="message-"]'));
+                if (elements.length === 0) return null;
+                
+                const nums = elements
+                    .map(el => {
+                        const match = el.id.match(/message-(\d+)/);
+                        return match ? parseInt(match[1], 10) : null;
+                    })
+                    .filter(n => n !== null);
+                
+                return nums.length > 0 ? Math.max(...nums) : null;
+            })()
+        `, &maxN),
+	)
+	log.InfoLog.Println("Максимальное Id сообщения: ", *maxN)
 
-			lastMsgId = 0
-			for _, id := range ids {
-				num, err := strconv.Atoi(id[8:]) // "message-" = 8 символов
-				if err == nil && num > lastMsgId {
-					lastMsgId = num
-				}
-			}
+	if err != nil {
+		log.ErrorLog.Fatalln("Ошибка поиска максимального n:", err)
+	}
 
-			if lastMsgId == 0 {
-				log.ErrorLog.Println("Сообщения не найдены")
-				err = chromedp.Run(ctx,
-					chromedp.Navigate(urlTg),
-				)
-				continue
-			}
+	if maxN == nil {
+		log.ErrorLog.Fatalln("Элементы не найдены или некорректные ID")
+	}
+	// if (lastMsg.Id - 10000) >
 
-			log.InfoLog.Println("Сообщение имеет ID ", lastMsgId)
+	lastId, err := strconv.Atoi(lastMsg.ID)
+	if err != nil {
+		log.ErrorLog.Println("Ошибка при конвертации ID сообщения в число: " + err.Error())
+	}
 
-			var xpathMsg string
-			if id[0] == '-' { //Сообщение в беседе
-				err = chromedp.Run(ctx,
-					chromedp.Text(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, &author),
-				)
-				if err != nil {
-					log.ErrorLog.Println("Ошибка определения автора сообзения в беседе")
-				}
-				xpathMsg = fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div[2]`, lastMsgId)
-			} else {
-				xpathMsg = fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, lastMsgId)
-			}
+	for n = *maxN; n >= lastId; n-- {
+		var outMsg bool
+		var exists bool
+		var classAttr string
+		xpath := fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, n)
 
+		// Проверка существования элемента
+		err := chromedp.Run(ctx,
+			chromedp.Evaluate(
+				fmt.Sprintf(`
+                !!document.evaluate('%s', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue
+            `, xpath),
+				&exists,
+			),
+		)
+		if err != nil || !exists {
+			continue
+		} else {
 			err = chromedp.Run(ctx,
-				chromedp.AttributeValue(xpathMsg, "class", &classAttr, &exists),
+				chromedp.AttributeValue(xpath, "class", &classAttr, &exists),
 			)
-
-			log.InfoLog.Println("Сообщение имеет аттрибуты: ", classAttr)
-
-			if id[0] == '-' && strings.Contains(classAttr, "message-subheader") {
-				xpathMsg = fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div[3]`, lastMsgId)
-				err = chromedp.Run(ctx,
-					chromedp.AttributeValue(xpathMsg, "class", &classAttr, &exists),
-				)
-			}
-
 			if err != nil {
 				log.ErrorLog.Println(err)
 				continue
 			}
+		}
 
-			substrings := []string{"with-outgoing-icon", "own", "FPceNkgD"} // Сообщение либо исходящее, либо стикер
-			for _, substing := range substrings {
-				if strings.Contains(classAttr, substing) {
-					outMsg = true
-				}
+		log.InfoLog.Println("Проверяю сообщение с id=", n, "\tАттрибуты: ", classAttr)
+
+		substrings := []string{"with-outgoing-icon", "own"}
+		for _, substing := range substrings {
+			if strings.Contains(classAttr, substing) {
+				outMsg = true
+			}
+		}
+		if outMsg {
+			log.InfoLog.Println("Это исходящее сообщение")
+			outMsg = false
+			continue
+		}
+		lastMsg.ID = strconv.Itoa(n)
+		log.InfoLog.Println("Последнее входящее сообщение в этом чате имеет id = ", n)
+		break
+	}
+	fmt.Println("Начал считывать сообщения в Tg")
+
+	var skipMsg bool
+
+	for {
+		select {
+		case outcomingMsg = <-outcoming:
+			log.InfoLog.Println("Считано сообщение из outcoming: ", outcomingMsg)
+			err := chromedp.Run(ctx,
+				chromedp.SendKeys(`//*[@id="editable-message-text"]`, outcomingMsg.Text, chromedp.NodeVisible),
+				chromedp.Sleep(500*time.Millisecond),
+				chromedp.Click(`//*[@id="MiddleColumn"]/div[4]/div[3]/div/div[2]/div[1]/button`, chromedp.NodeVisible),
+			)
+			if err != nil {
+				log.ErrorLog.Println(err)
+			}
+			log.InfoLog.Println("Outcoming message: ", outcomingMsg.Text, "has been sended")
+		default:
+			err := chromedp.Run(ctx,
+				chromedp.Evaluate(`
+            (() => {
+                const elements = Array.from(document.querySelectorAll('[id^="message-"]'));
+                if (elements.length === 0) return null;
+                
+                const nums = elements
+                    .map(el => {
+                        const match = el.id.match(/message-(\d+)/);
+                        return match ? parseInt(match[1], 10) : null;
+                    })
+                    .filter(n => n !== null);
+                
+                return nums.length > 0 ? Math.max(...nums) : null;
+            })()
+        `, &maxN),
+			)
+
+			if err != nil {
+				log.ErrorLog.Fatalln("Ошибка поиска максимального n:", err)
 			}
 
-			if outMsg {
-				outMsg = false
-				log.InfoLog.Println("Сообщение либо исходящее, либо стикер")
-				chromedp.Run(ctx,
-					chromedp.Navigate(urlTg),
+			if maxN == nil {
+				log.ErrorLog.Fatalln("Элементы не найдены или некорректные ID")
+			}
+
+			// Шаг 2: Собрать текст из элементов без with-outgoing-icon
+			lastId, err := strconv.Atoi(lastMsg.ID)
+			if err != nil {
+				log.ErrorLog.Println("Ошибка при конвертации ID сообщения в число: " + err.Error())
+			}
+
+			var message string
+			for n := *maxN; n >= lastId; n-- {
+				var outMsg bool
+				var exists bool
+				var classAttr string
+				xpath := fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, n)
+
+				err = chromedp.Run(ctx,
+					chromedp.Evaluate(
+						fmt.Sprintf(`
+                !!document.evaluate('%s', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue
+            `, xpath),
+						&exists,
+					),
 				)
+
+				if err != nil || !exists {
+					continue
+				}
+
+				err = chromedp.Run(ctx,
+					chromedp.AttributeValue(xpath, "class", &classAttr, &exists),
+				)
+
+				if err != nil {
+					log.ErrorLog.Println(err)
+					continue
+				}
+
+				substrings := []string{"with-outgoing-icon", "own"}
+				for _, substing := range substrings {
+					if strings.Contains(classAttr, substing) {
+						outMsg = true
+					}
+				}
+
+				if outMsg {
+					outMsg = false
+					continue
+				}
+
+				if lastId == n {
+					skipMsg = true
+					break
+				}
+				lastMsg.ID = strconv.Itoa(n)
+
+				log.InfoLog.Println("Обнаружено новое входящее сообщение")
+
+				log.InfoLog.Println("Сообщение входящее, его аттрибуты: " + classAttr)
+
+				if strings.Contains(classAttr, "message-subheader") { // это ответ на сообщение
+					xpath2 := fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div[2]`, n)
+					err = chromedp.Run(ctx,
+						chromedp.Text(xpath2, &message, chromedp.BySearch),
+					)
+					if err != nil {
+						log.ErrorLog.Fatalln(err)
+					}
+					if strings.Contains(classAttr, "Audio") { // Пришло гс ответом на сообщение
+						message = convertVoice(ctx, n, log.InfoLog, log.ErrorLog, message, 1)
+					}
+					if strings.Contains(classAttr, "RoundVideo") { // Пришел кружок ответом на сообщение
+						message = convertVoice(ctx, n, log.InfoLog, log.ErrorLog, message, 2)
+					} else { // Текстовое сообщение ответом на сообщение
+						message = message[:len(message)-6]
+					}
+					break
+				} else { // это не ответ на сообщение
+					err = chromedp.Run(ctx,
+						chromedp.Text(xpath, &message, chromedp.BySearch),
+					)
+					if strings.Contains(classAttr, "Audio") { // Пришло гс
+						message = convertVoice(ctx, n, log.InfoLog, log.ErrorLog, message, 1)
+					}
+					if strings.Contains(classAttr, "RoundVideo") { // Пришел кружок
+						message = convertVoice(ctx, n, log.InfoLog, log.ErrorLog, message, 2)
+					} else { // Текстовое сообщение
+						message = message[:len(message)-6]
+					}
+					if err != nil {
+						log.ErrorLog.Fatalln(err)
+					}
+					break
+				}
+			}
+			if skipMsg {
+				skipMsg = false
 				continue
 			}
-
-			if strings.Contains(classAttr, "message-subheader") { // это ответ на сообщение
-				xpath2 := fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, lastMsgId)
-				err = chromedp.Run(ctx,
-					chromedp.Text(xpath2, &message, chromedp.BySearch),
-				)
-				if err != nil {
-					log.ErrorLog.Fatalln(err)
-				}
-				if strings.Contains(classAttr, "Audio") { // Пришло гс ответом на сообщение
-					log.InfoLog.Println("Пришло гс ответом на сообщение")
-					message = convertVoice(ctx, lastMsgId, log, message, 1)
-				}
-				if strings.Contains(classAttr, "RoundVideo") { // Пришел кружок ответом на сообщение
-					log.InfoLog.Println("Пришел кружок ответом на сообщение")
-					message = convertVoice(ctx, lastMsgId, log, message, 2)
-				} else { // Текстовое сообщение ответом на сообщение
-					log.InfoLog.Println("Текстовое сообщение ответом на сообщение")
-					message = processMessage(message, author)
-				}
-				break
-			} else { // это не ответ на сообщение
-				err = chromedp.Run(ctx,
-					chromedp.Text(xpathMsg, &message, chromedp.BySearch),
-				)
-				if strings.Contains(classAttr, "Audio") { // Пришло гс
-					log.InfoLog.Println("Пришло гс")
-					message = convertVoice(ctx, lastMsgId, log, message, 1)
-				}
-				if strings.Contains(classAttr, "RoundVideo") { // Пришел кружок
-					log.InfoLog.Println("Пришел кружок")
-					message = convertVoice(ctx, lastMsgId, log, message, 2)
-				} else { // Текстовое сообщение
-					log.InfoLog.Println("Текстовое сообщение")
-					message = processMessage(message, author)
-				}
-				if err != nil {
-					log.ErrorLog.Fatalln(err)
-				}
-				break
-			}
+			fmt.Println("Обнаружено новое сообщение: ", message)
+			lastMsg.Text = message
+			incoming <- lastMsg
+			log.InfoLog.Println("В incoming отправлено: ", lastMsg)
+			time.Sleep(time.Second)
 		}
-
-		incoming <- models.Message{Text: message, ID: id}
-		log.InfoLog.Println("Входящее сообщение отправленно в AI")
-		outcomingMsg := <-outcoming
-		log.InfoLog.Println("Получен ответ от AI: ", outcomingMsg)
-		err = chromedp.Run(ctx,
-			chromedp.SendKeys(`//*[@id="editable-message-text"]`, outcomingMsg.Text, chromedp.NodeVisible),
-			chromedp.Sleep(500*time.Millisecond),
-			chromedp.Click(`//*[@id="MiddleColumn"]/div[4]/div[3]/div/div[2]/div[1]/button`, chromedp.NodeVisible),
-			chromedp.Sleep(500*time.Millisecond),
-			chromedp.Navigate(urlTg),
-		)
-		if err != nil {
-			log.ErrorLog.Println(err)
-		}
-		log.InfoLog.Println("Outcoming message: ", outcomingMsg.Text, "has been sended")
 	}
-
 }
 
 func convertVoice(ctx context.Context, id int, log *logger.Logger, msgTime string, typeMsg int) string {

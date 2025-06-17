@@ -12,7 +12,7 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan models.Message, wg *sync.WaitGroup) {
+func SetupAi(log *logger.Logger, wg *sync.WaitGroup) {
 	profilePath := "./chrome_profile_ai"
 
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -69,6 +69,10 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 
 	time.Sleep(5 * time.Second)
 	wg.Done()
+}
+
+func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan models.Message, ctx context.Context) {
+
 	wg.Wait()
 
 	for {
@@ -81,7 +85,7 @@ func Handler(log *logger.Logger, incoming chan models.Message, outcoming chan mo
 			chromedp.Click(`//*[@id="chat-body"]/div[2]/div/div/div/div[2]/button`, chromedp.NodeVisible),
 			// chromedp.Sleep(15*time.Second),
 			chromedp.WaitVisible(`//*[@id="chat-messages"]/div[1]/div[1]/div/div/div[1]/div/div[1]/div[1]/div[2]/div[2]/div/div[1]/p`),
-			chromedp.Sleep(5*time.Second),
+			chromedp.Sleep(10*time.Second),
 			chromedp.Text(`//*[@id="chat-messages"]/div[1]/div[1]/div/div/div[1]/div/div[1]/div[1]/div[2]/div[2]/div/div[1]/p`, &outcomingMsg.Text, chromedp.NodeVisible),
 		)
 		if err != nil {
