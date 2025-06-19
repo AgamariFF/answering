@@ -1,6 +1,7 @@
 package tg
 
 import (
+	"answering/internal"
 	"answering/logger"
 	"answering/models"
 	"context"
@@ -15,8 +16,27 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+func FindFreeProfile(log *logger.Logger) string {
+	var profilePath string
+	for i := 0; i < 100; i++ {
+		profilePath = "./chrome_profile_tg_" + strconv.Itoa(i) + "/"
+		if !internal.IsBrowserRunning(profilePath) {
+			break
+		}
+		if i == 99 {
+			panic("Не удалось найти свободный профиль")
+		}
+	}
+	if err := os.MkdirAll(profilePath, 0755); err != nil {
+		panic(err)
+	}
+	log.InfoLog.Println("Свободный путь для Tg: ", profilePath)
+
+	return profilePath
+}
+
 func SetupTg(log *logger.Logger, urlTg string) (context.Context, context.CancelFunc) {
-	profilePathTg := "./chrome_profile_tg"
+	profilePathTg := FindFreeProfile(log)
 
 	optionsTg := append(
 		chromedp.DefaultExecAllocatorOptions[:],
@@ -89,92 +109,77 @@ func SetupTg(log *logger.Logger, urlTg string) (context.Context, context.CancelF
 func HandlerCheckMsg(log *logger.Logger, NewChatId chan string, ctx context.Context) {
 	var id, author string
 	var exists bool
-	for true {
-		for i := 0; true; i++ {
-			time.Sleep(300 * time.Millisecond)
-			count := 2 + i%5
-			xpath := `//*[@id="LeftColumn-main"]/div[2]/div/div[2]/div/div[2]/div[` + strconv.Itoa(count) + `]/a`
-			xpathText := xpath + `/div[3]/div[2]/div/div`
-			xpathAuthor := xpath + `/div[3]/div[1]/div[1]/h3`
+	for i := 0; true; i++ {
+		time.Sleep(5 * time.Second)
+		count := 2 + i%5
+		xpath := `//*[@id="LeftColumn-main"]/div[2]/div/div[2]/div/div[2]/div[` + strconv.Itoa(count) + `]/a`
+		xpathText := xpath + `/div[3]/div[2]/div/div`
+		xpathAuthor := xpath + `/div[3]/div[1]/div[1]/h3`
 
-			err := chromedp.Run(ctx,
-				chromedp.EvaluateAsDevTools(fmt.Sprintf(`
+		err := chromedp.Run(ctx,
+			chromedp.EvaluateAsDevTools(fmt.Sprintf(`
 			document.evaluate('%s', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue !== null
 		`, xpathText), &exists),
-			)
-			if err != nil {
-				log.ErrorLog.Println("Failed to find unread: " + err.Error())
-			}
-			if !exists {
-				continue
-			}
-			log.InfoLog.Println("Найдено непрочитанное сообщение")
+		)
+		if err != nil {
+			log.ErrorLog.Println("Failed to find unread: " + err.Error())
+		}
+		if !exists {
+			continue
+		}
+		log.InfoLog.Println("Найдено непрочитанное сообщение")
 
-			var ids []string
-			err = chromedp.Run(ctx,
-				chromedp.AttributeValue(xpath, "href", &id, nil, chromedp.BySearch),
-				chromedp.Text(xpathAuthor, &author),
-				chromedp.Click(xpathText),
-				chromedp.Sleep(5*time.Second),
-				chromedp.Evaluate(`
+		var ids []string
+		err = chromedp.Run(ctx,
+			chromedp.AttributeValue(xpath, "href", &id, nil, chromedp.BySearch),
+			chromedp.Text(xpathAuthor, &author),
+			chromedp.Evaluate(`
 				Array.from(document.querySelectorAll('[id^="message-"]'))
 				.map(el => el.id)
 				.filter(id => /^message-\d+$/.test(id))
 				`, &ids),
-			)
-			if err != nil {
-				log.ErrorLog.Println(err)
-			}
-			NewChatId <- author
+			chromedp.Navigate("https://web.telegram.org/a"),
+		)
+		if err != nil {
+			log.ErrorLog.Println(err)
 		}
+		NewChatId <- id[1:len(id)]
 	}
 }
 
-func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming chan models.Message, ctx context.Context) {
+func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming chan models.Message, monitoringChannel chan bool, ctx context.Context) {
 	var outcomingMsg models.Message
-	var maxN *int
 	var n int
-	lastMsg := models.Message{"", ""}
-	time.Sleep(time.Second)
+	maxID := 0
+	lastId := 0
+	lastMsg := models.Message{Text: "", ID: ""}
+
+	time.Sleep(time.Second * 5)
+
 	err := chromedp.Run(ctx,
 		chromedp.EmulateViewport(1500, 800),
-		chromedp.Evaluate(`
-            (() => {
-                const elements = Array.from(document.querySelectorAll('[id^="message-"]'));
-                if (elements.length === 0) return null;
-                
-                const nums = elements
-                    .map(el => {
-                        const match = el.id.match(/message-(\d+)/);
-                        return match ? parseInt(match[1], 10) : null;
-                    })
-                    .filter(n => n !== null);
-                
-                return nums.length > 0 ? Math.max(...nums) : null;
-            })()
-        `, &maxN),
+		chromedp.Evaluate(
+			`
+    const container = document.querySelector('.MessageList'); // Замените на реальный селектор
+    if (container) {
+        container.scrollTop = container.scrollHeight;
+    } else {
+        console.error("Контейнер для прокрутки не найден");
+    }
+`, nil),
 	)
-	log.InfoLog.Println("Максимальное Id сообщения: ", *maxN)
-
 	if err != nil {
-		log.ErrorLog.Fatalln("Ошибка поиска максимального n:", err)
+		log.ErrorLog.Println("Ошибка изменения разрешения или прокручивания")
 	}
 
-	if maxN == nil {
-		log.ErrorLog.Fatalln("Элементы не найдены или некорректные ID")
-	}
-	// if (lastMsg.Id - 10000) >
+	maxID = findMaxMessageId(log, ctx)
 
-	lastId, err := strconv.Atoi(lastMsg.ID)
-	if err != nil {
-		log.ErrorLog.Println("Ошибка при конвертации ID сообщения в число: " + err.Error())
-	}
-
-	for n = *maxN; n >= lastId; n-- {
+	for n = maxID; n >= lastId; n-- {
 		var outMsg bool
 		var exists bool
 		var classAttr string
 		xpath := fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, n)
+		// xpath := fmt.Sprintf(`//*[@data-mid="%d"]/div[3]/div/div[1]/div`, n)
 
 		// Проверка существования элемента
 		err := chromedp.Run(ctx,
@@ -212,11 +217,13 @@ func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming c
 		}
 		lastMsg.ID = strconv.Itoa(n)
 		log.InfoLog.Println("Последнее входящее сообщение в этом чате имеет id = ", n)
+		lastId = n
 		break
 	}
 	fmt.Println("Начал считывать сообщения в Tg")
 
 	var skipMsg bool
+	lastId--
 
 	for {
 		select {
@@ -232,31 +239,9 @@ func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming c
 			}
 			log.InfoLog.Println("Outcoming message: ", outcomingMsg.Text, "has been sended")
 		default:
-			err := chromedp.Run(ctx,
-				chromedp.Evaluate(`
-            (() => {
-                const elements = Array.from(document.querySelectorAll('[id^="message-"]'));
-                if (elements.length === 0) return null;
-                
-                const nums = elements
-                    .map(el => {
-                        const match = el.id.match(/message-(\d+)/);
-                        return match ? parseInt(match[1], 10) : null;
-                    })
-                    .filter(n => n !== null);
-                
-                return nums.length > 0 ? Math.max(...nums) : null;
-            })()
-        `, &maxN),
-			)
+			maxID = 0
 
-			if err != nil {
-				log.ErrorLog.Fatalln("Ошибка поиска максимального n:", err)
-			}
-
-			if maxN == nil {
-				log.ErrorLog.Fatalln("Элементы не найдены или некорректные ID")
-			}
+			maxID = findMaxMessageId(log, ctx)
 
 			// Шаг 2: Собрать текст из элементов без with-outgoing-icon
 			lastId, err := strconv.Atoi(lastMsg.ID)
@@ -265,11 +250,12 @@ func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming c
 			}
 
 			var message string
-			for n := *maxN; n >= lastId; n-- {
+			for n := maxID; n <= lastId; n-- {
 				var outMsg bool
 				var exists bool
 				var classAttr string
 				xpath := fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, n)
+				// xpath := fmt.Sprintf(`//*[@data-mid="%d"]/div[3]/div/div[1]/div`, n)
 
 				err = chromedp.Run(ctx,
 					chromedp.Evaluate(
@@ -324,10 +310,10 @@ func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming c
 						log.ErrorLog.Fatalln(err)
 					}
 					if strings.Contains(classAttr, "Audio") { // Пришло гс ответом на сообщение
-						message = convertVoice(ctx, n, log.InfoLog, log.ErrorLog, message, 1)
+						message = convertVoice(ctx, n, log, message, 1)
 					}
 					if strings.Contains(classAttr, "RoundVideo") { // Пришел кружок ответом на сообщение
-						message = convertVoice(ctx, n, log.InfoLog, log.ErrorLog, message, 2)
+						message = convertVoice(ctx, n, log, message, 2)
 					} else { // Текстовое сообщение ответом на сообщение
 						message = message[:len(message)-6]
 					}
@@ -337,10 +323,10 @@ func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming c
 						chromedp.Text(xpath, &message, chromedp.BySearch),
 					)
 					if strings.Contains(classAttr, "Audio") { // Пришло гс
-						message = convertVoice(ctx, n, log.InfoLog, log.ErrorLog, message, 1)
+						message = convertVoice(ctx, n, log, message, 1)
 					}
 					if strings.Contains(classAttr, "RoundVideo") { // Пришел кружок
-						message = convertVoice(ctx, n, log.InfoLog, log.ErrorLog, message, 2)
+						message = convertVoice(ctx, n, log, message, 2)
 					} else { // Текстовое сообщение
 						message = message[:len(message)-6]
 					}
@@ -357,10 +343,51 @@ func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming c
 			fmt.Println("Обнаружено новое сообщение: ", message)
 			lastMsg.Text = message
 			incoming <- lastMsg
+			monitoringChannel <- true
+
 			log.InfoLog.Println("В incoming отправлено: ", lastMsg)
 			time.Sleep(time.Second)
 		}
+		time.Sleep(time.Second)
 	}
+}
+
+func findMaxMessageId(log *logger.Logger, ctx context.Context) int {
+	const jsScript = `
+(() => {
+    const elements = document.querySelectorAll('[data-message-id]');
+    let maxID = 0;
+    elements.forEach(el => {
+        const id = parseInt(el.getAttribute('data-message-id'), 10);
+        if (id > maxID) maxID = id;
+    });
+    return maxID;
+})();
+`
+
+	maxID := 0
+	err := chromedp.Run(ctx,
+		chromedp.Evaluate(jsScript, &maxID))
+	log.InfoLog.Println("Максимальное Id сообщения: ", maxID)
+
+	if err != nil {
+		log.ErrorLog.Fatalln("Ошибка поиска максимального n:", err)
+	}
+
+	if maxID == 0 {
+		var pageContent string
+		err := chromedp.Run(ctx,
+			chromedp.OuterHTML("html", &pageContent),
+		)
+		if err != nil {
+			log.ErrorLog.Println("Элементы не найдены или некорректные ID")
+			log.ErrorLog.Panic("Ошибка при получении HTML-кода страницы:", err)
+		}
+		log.InfoLog.Println("HTML-код страницы:", pageContent)
+		log.ErrorLog.Panic("Элементы не найдены или некорректные ID; Код старницы:\n")
+	}
+
+	return maxID
 }
 
 func convertVoice(ctx context.Context, id int, log *logger.Logger, msgTime string, typeMsg int) string {
