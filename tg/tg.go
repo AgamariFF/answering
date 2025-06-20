@@ -110,7 +110,7 @@ func HandlerCheckMsg(log *logger.Logger, NewChatId chan string, ctx context.Cont
 	var id, author string
 	var exists bool
 	for i := 0; true; i++ {
-		time.Sleep(5 * time.Second)
+		time.Sleep(time.Second)
 		count := 2 + i%5
 		xpath := `//*[@id="LeftColumn-main"]/div[2]/div/div[2]/div/div[2]/div[` + strconv.Itoa(count) + `]/a`
 		xpathText := xpath + `/div[3]/div[2]/div/div`
@@ -149,10 +149,8 @@ func HandlerCheckMsg(log *logger.Logger, NewChatId chan string, ctx context.Cont
 
 func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming chan models.Message, monitoringChannel chan bool, ctx context.Context) {
 	var outcomingMsg models.Message
-	var n int
 	maxID := 0
-	lastId := 0
-	lastMsg := models.Message{Text: "", ID: ""}
+	lastMsg := models.Message{Text: "", ID: "0"}
 
 	time.Sleep(time.Second * 5)
 
@@ -172,60 +170,11 @@ func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming c
 		log.ErrorLog.Println("Ошибка изменения разрешения или прокручивания")
 	}
 
-	maxID = findMaxMessageId(log, ctx)
-
-	for n = maxID; n >= lastId; n-- {
-		var outMsg bool
-		var exists bool
-		var classAttr string
-		xpath := fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, n)
-		// xpath := fmt.Sprintf(`//*[@data-mid="%d"]/div[3]/div/div[1]/div`, n)
-
-		// Проверка существования элемента
-		err := chromedp.Run(ctx,
-			chromedp.Evaluate(
-				fmt.Sprintf(`
-                !!document.evaluate('%s', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue
-            `, xpath),
-				&exists,
-			),
-		)
-		if err != nil || !exists {
-			continue
-		} else {
-			err = chromedp.Run(ctx,
-				chromedp.AttributeValue(xpath, "class", &classAttr, &exists),
-			)
-			if err != nil {
-				log.ErrorLog.Println(err)
-				continue
-			}
-		}
-
-		log.InfoLog.Println("Проверяю сообщение с id=", n, "\tАттрибуты: ", classAttr)
-
-		substrings := []string{"with-outgoing-icon", "own"}
-		for _, substing := range substrings {
-			if strings.Contains(classAttr, substing) {
-				outMsg = true
-			}
-		}
-		if outMsg {
-			log.InfoLog.Println("Это исходящее сообщение")
-			outMsg = false
-			continue
-		}
-		lastMsg.ID = strconv.Itoa(n)
-		log.InfoLog.Println("Последнее входящее сообщение в этом чате имеет id = ", n)
-		lastId = n
-		break
-	}
-	fmt.Println("Начал считывать сообщения в Tg")
-
 	var skipMsg bool
-	lastId--
+	lastId := 0
 
 	for {
+		time.Sleep(time.Second)
 		select {
 		case outcomingMsg = <-outcoming:
 			log.InfoLog.Println("Считано сообщение из outcoming: ", outcomingMsg)
@@ -238,20 +187,26 @@ func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming c
 				log.ErrorLog.Println(err)
 			}
 			log.InfoLog.Println("Outcoming message: ", outcomingMsg.Text, "has been sended")
+			lastId, err = strconv.Atoi(outcomingMsg.ID)
+			if err != nil {
+				log.ErrorLog.Println("Ошибка конвертации id из outcoming: " + err.Error())
+			}
 		default:
-			maxID = 0
+
+			lastId, err = strconv.Atoi(lastMsg.ID)
+			if err != nil {
+				log.ErrorLog.Println("Ошибка конвертации id в default: " + err.Error())
+			}
 
 			maxID = findMaxMessageId(log, ctx)
-
-			// Шаг 2: Собрать текст из элементов без with-outgoing-icon
-			lastId, err := strconv.Atoi(lastMsg.ID)
-			if err != nil {
-				log.ErrorLog.Println("Ошибка при конвертации ID сообщения в число: " + err.Error())
+			if lastId == 0 {
+				lastId = maxID - 200
 			}
 
 			var message string
-			for n := maxID; n <= lastId; n-- {
-				var outMsg bool
+			for n := maxID; n != lastId; n-- {
+				log.InfoLog.Println("Проверяю сообщение с id = " + strconv.Itoa(n))
+				var outMsg = false
 				var exists bool
 				var classAttr string
 				xpath := fmt.Sprintf(`//*[@id="message-%d"]/div[3]/div/div[1]/div`, n)
@@ -261,18 +216,25 @@ func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming c
 					chromedp.Evaluate(
 						fmt.Sprintf(`
                 !!document.evaluate('%s', document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue
-            `, xpath),
+           	 `, xpath),
 						&exists,
 					),
 				)
 
-				if err != nil || !exists {
+				if err != nil {
+					log.ErrorLog.Println("Ошибка нахождения сообщения: " + err.Error())
+					continue
+				}
+				if !exists {
+					log.ErrorLog.Println("Сообщение не найдено")
 					continue
 				}
 
 				err = chromedp.Run(ctx,
 					chromedp.AttributeValue(xpath, "class", &classAttr, &exists),
 				)
+
+				log.InfoLog.Println("Сообщение с id = " + strconv.Itoa(n) + " имеет аттрибуты: " + classAttr)
 
 				if err != nil {
 					log.ErrorLog.Println(err)
@@ -288,16 +250,17 @@ func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming c
 
 				if outMsg {
 					outMsg = false
+					log.InfoLog.Println("Сообщение исходящее, пропускаю")
+					lastMsg.ID = strconv.Itoa(n)
 					continue
 				}
 
 				if lastId == n {
+					log.InfoLog.Println("lastId==n, пропускаю")
 					skipMsg = true
 					break
 				}
 				lastMsg.ID = strconv.Itoa(n)
-
-				log.InfoLog.Println("Обнаружено новое входящее сообщение")
 
 				log.InfoLog.Println("Сообщение входящее, его аттрибуты: " + classAttr)
 
@@ -340,12 +303,16 @@ func HandlerDialog(log *logger.Logger, incoming chan models.Message, outcoming c
 				skipMsg = false
 				continue
 			}
+			if message == "" {
+				log.InfoLog.Println("Это сообзение уже обработано")
+				continue
+			}
 			fmt.Println("Обнаружено новое сообщение: ", message)
 			lastMsg.Text = message
 			incoming <- lastMsg
-			monitoringChannel <- true
-
 			log.InfoLog.Println("В incoming отправлено: ", lastMsg)
+			// monitoringChannel <- true
+
 			time.Sleep(time.Second)
 		}
 		time.Sleep(time.Second)

@@ -42,7 +42,7 @@ func main() {
 				} else {
 					go dialog(log, NewId, "https://character.ai/chat/8XYC6I1tuVesOeifyRXkz6k0Q9tJxoLVXewJR1q5In4", deleteId)
 					IdChats[NewId] = struct{}{}
-					log.InfoLog.Println("Чат запущен в обработку")
+					log.InfoLog.Println("Чат с id" + NewId + " запущен в обработку")
 				}
 				time.Sleep(5 * time.Second)
 			case IdChatDelete := <-deleteId:
@@ -57,8 +57,8 @@ func main() {
 
 func dialog(log *logger.Logger, chat_id string, ai_url string, delete_chat_id chan string) {
 	incoming := make(chan models.Message)
-	outcoming := make(chan models.Message)
-	monitoringChannel := make(chan bool)
+	outcoming := make(chan models.Message, 1)
+	monitoringChannel := make(chan bool, 1)
 
 	var waitSetupDialog sync.WaitGroup
 	waitSetupDialog.Add(2)
@@ -89,8 +89,9 @@ func dialog(log *logger.Logger, chat_id string, ai_url string, delete_chat_id ch
 			delete_chat_id <- chat_id
 			return
 
-		case _ = <-monitoringChannel:
+		case <-monitoringChannel:
 			// Если пришло новое сообщение, сбрасываем таймер
+			log.InfoLog.Println("Пришло новое сообщение, таймер сброшен")
 			if !timer.Stop() {
 				<-timer.C
 			}
@@ -107,6 +108,8 @@ func dialog(log *logger.Logger, chat_id string, ai_url string, delete_chat_id ch
 			delete_chat_id <- chat_id
 			log.InfoLog.Println("Контекст AI завершен. Завершаем работу.")
 			return
+		default:
+			time.Sleep(time.Second)
 		}
 	}
 
